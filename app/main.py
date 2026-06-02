@@ -164,8 +164,6 @@ def _load_model(path: Path) -> Any:
 
 
 def _try_start_processing() -> None:
-    # Prevent multiple heavy video/model requests from running together and
-    # exhausting Railway RAM. The Flutter app / Swagger gets a clear response.
     if not PROCESS_LOCK.acquire(blocking=False):
         raise HTTPException(
             status_code=429,
@@ -192,7 +190,6 @@ L_ELBOW, R_ELBOW = 13, 14
 L_SHOULDER, R_SHOULDER = 11, 12
 L_INDEX, R_INDEX = 19, 20
 L_HIP, R_HIP = 23, 24
-
 
 
 def _round_dict(d: Dict[str, Any], ndigits: int = 6) -> Dict[str, Any]:
@@ -238,8 +235,6 @@ def _label_payload(
     classes = _model_classes(model) if model is not None else [0, 1]
     prob_list = [float(x) for x in list(prob)]
 
-    # Confirmed AI-team mapping:
-    # class 0 = HEALTHY, class 1 = PATIENT.
     prob_by_class = {str(cls): prob_list[i] for i, cls in enumerate(classes) if i < len(prob_list)}
 
     p_healthy = float(prob_by_class.get("0", prob_list[0] if prob_list else 0.0))
@@ -282,6 +277,23 @@ def ultra_recovery_processing(frame: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
 
+def _safe_fft_freq(signal: np.ndarray, fps: float = 25.0) -> float:
+    n = len(signal)
+
+    if n < 10:
+        return 0.0
+
+    sig = signal - np.mean(signal)
+
+    yf = np.abs(fft(sig))[: n // 2]
+    xf = fftfreq(n, 1.0 / fps)[: n // 2]
+
+    if len(yf) < 2:
+        return 0.0
+
+    idx = np.argmax(yf[1:]) + 1
+    return float(abs(xf[idx]))
+
 
 def _safe_fft_features(signal: np.ndarray, fps: float) -> Tuple[float, float, float]:
     n = len(signal)
@@ -306,24 +318,6 @@ def _safe_fft_features(signal: np.ndarray, fps: float) -> Tuple[float, float, fl
     tremor_ratio = tremor_pow / total_pow
 
     return dom_freq, dom_power / total_pow, tremor_ratio
-
-
-def _safe_fft_freq(signal: np.ndarray, fps: float = 25.0) -> float:
-    n = len(signal)
-
-    if n < 10:
-        return 0.0
-
-    sig = signal - np.mean(signal)
-
-    yf = np.abs(fft(sig))[: n // 2]
-    xf = fftfreq(n, 1.0 / fps)[: n // 2]
-
-    if len(yf) < 2:
-        return 0.0
-
-    idx = np.argmax(yf[1:]) + 1
-    return float(abs(xf[idx]))
 
 
 def _elbow_angle(shoulder: np.ndarray, elbow: np.ndarray, wrist: np.ndarray) -> np.ndarray:
@@ -502,7 +496,6 @@ def extract_finger_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     return features, len(lm_seq), chart
 
 
-
 def _pose_sequence(video_path: str, n_frames: int = 30) -> List[np.ndarray]:
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -548,15 +541,6 @@ def _pose_sequence(video_path: str, n_frames: int = 30) -> List[np.ndarray]:
 
 
 def extract_romberg_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[str, float], int, Dict[str, List[float]]]:
-    """Extract Romberg features using the exact AI-team feature set/order.
-
-    Confirmed feature order:
-    sway_x, sway_y, sway_range_x, sway_range_y, sway_std_x, sway_std_y,
-    hip_sway_x, hip_sway_y, hip_sway_range_x, hip_sway_range_y,
-    vel_mean, vel_std, vel_max, acc_mean, acc_std,
-    angle_mean, angle_std, angle_range, sway_path,
-    ankle_mean, ankle_std, ankle_max, motion_energy, entropy.
-    """
     lm_seq = _pose_sequence(video_path, n_frames)
     lm3 = np.array([s[:, :3] for s in lm_seq], dtype=float)
 
@@ -572,9 +556,6 @@ def extract_romberg_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[
     if body_height < 1e-5:
         body_height = 1.0
 
-    # -------------------
-    # SWAY FEATURES
-    # -------------------
     sway_x = float(np.var(shoulder_center[:, 0]) / body_height)
     sway_y = float(np.var(shoulder_center[:, 1]) / body_height)
     sway_range_x = float((np.max(shoulder_center[:, 0]) - np.min(shoulder_center[:, 0])) / body_height)
@@ -587,52 +568,30 @@ def extract_romberg_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[
     hip_sway_range_x = float((np.max(hip_center[:, 0]) - np.min(hip_center[:, 0])) / body_height)
     hip_sway_range_y = float((np.max(hip_center[:, 1]) - np.min(hip_center[:, 1])) / body_height)
 
-    # -------------------
-    # VELOCITY FEATURES
-    # -------------------
     velocity = np.linalg.norm(np.diff(shoulder_center, axis=0), axis=1)
     vel_mean = float(np.mean(velocity)) if len(velocity) else 0.0
     vel_std = float(np.std(velocity)) if len(velocity) else 0.0
     vel_max = float(np.max(velocity)) if len(velocity) else 0.0
 
-    # -------------------
-    # ACCELERATION FEATURES
-    # -------------------
     acceleration = np.diff(velocity)
     acc_mean = float(np.mean(acceleration)) if len(acceleration) else 0.0
     acc_std = float(np.std(acceleration)) if len(acceleration) else 0.0
 
-    # -------------------
-    # BODY ANGLE FEATURES
-    # -------------------
     body_axis = shoulder_center - hip_center
     angles = np.arctan2(body_axis[:, 1], body_axis[:, 0])
     angle_mean = float(np.mean(angles))
     angle_std = float(np.std(angles))
     angle_range = float(np.max(angles) - np.min(angles))
 
-    # -------------------
-    # SWAY PATH
-    # -------------------
     sway_path = float(np.sum(np.linalg.norm(np.diff(shoulder_center, axis=0), axis=1))) if len(shoulder_center) > 1 else 0.0
 
-    # -------------------
-    # ANKLE MOVEMENT
-    # -------------------
     ankle_velocity = np.linalg.norm(np.diff(ankle_center, axis=0), axis=1)
     ankle_mean = float(np.mean(ankle_velocity)) if len(ankle_velocity) else 0.0
     ankle_std = float(np.std(ankle_velocity)) if len(ankle_velocity) else 0.0
     ankle_max = float(np.max(ankle_velocity)) if len(ankle_velocity) else 0.0
 
-    # -------------------
-    # MOTION ENERGY
-    # Same AI-team formula: diff over landmark x-coordinates array.
-    # -------------------
     motion_energy = float(np.mean(np.abs(np.diff(lm3[:, :, 0])))) if lm3.shape[1] > 1 else 0.0
 
-    # -------------------
-    # ENTROPY FEATURE
-    # -------------------
     if len(shoulder_center) > 1:
         entropy = float(
             np.mean(
@@ -686,6 +645,7 @@ def extract_romberg_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[
 
     return features, len(lm_seq), chart
 
+
 def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[str, float], int, Dict[str, List[float]]]:
     lm_seq = _pose_sequence(video_path, n_frames)
     lm3 = [s[:, :3] for s in lm_seq]
@@ -733,7 +693,7 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     spine_lateral = np.abs(spine[:, 0]) / (np.abs(spine[:, 1]) + 1e-6)
 
     # =========================
-    # Trunk AP Lean - matches the Tandem training notebook
+    # Trunk AP Lean
     # =========================
     sh_z = np.array([
         (lm[11, 2] + lm[12, 2]) / 2
@@ -748,7 +708,7 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     trunk_ap = np.degrees(
         np.arctan2(
             sh_z - hip_z,
-            torso_w * np.ones(len(lm3)),
+            torso_w * np.ones(len(lm3))
         )
     )
 
@@ -757,6 +717,9 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     trunk_ap_lean_max = float(np.max(np.abs(trunk_ap)))
     trunk_ap_lean_range = float(np.max(trunk_ap) - np.min(trunk_ap))
 
+    # =========================
+    # Ankle rhythm & step asymmetry
+    # =========================
     l_ankle_y = np.array([
         lm[27, 1]
         for lm in lm3
@@ -801,6 +764,9 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     knee_spread_mean = np.mean(knee_spread) / torso_w
     knee_spread_std = np.std(knee_spread) / torso_w
 
+    # =========================
+    # Hip velocity & acceleration
+    # =========================
     hip_center = np.array([
         (lm[23, :2] + lm[24, :2]) / 2
         for lm in lm3
@@ -809,7 +775,7 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     hip_vel = (
         np.linalg.norm(
             np.diff(hip_center, axis=0),
-            axis=1,
+            axis=1
         )
         /
         torso_w
@@ -817,8 +783,8 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
 
     hip_acc = np.abs(np.diff(hip_vel))
 
-    hip_vel_mean = float(np.mean(hip_vel)) if len(hip_vel) else 0.0
-    hip_vel_std = float(np.std(hip_vel)) if len(hip_vel) else 0.0
+    hip_vel_mean = float(np.mean(hip_vel))
+    hip_vel_std = float(np.std(hip_vel))
     hip_acc_mean = float(np.mean(hip_acc)) if len(hip_acc) else 0.0
 
     values = np.array([
@@ -908,8 +874,6 @@ def _medical_chatbot_answer(message: str) -> str:
     if not text:
         return "من فضلك اكتب سؤالك عن التصلب المتعدد MS فقط." + disclaimer
 
-    # The chatbot is intentionally restricted to Multiple Sclerosis (MS) only.
-    # Parkinson-related questions are refused instead of answered.
     parkinson_keywords = [
         "parkinson", "parkinson's", "باركنسون", "شلل رعاش", "الرعاش", "رعاش",
         "tremor", "tremors", "dopamine", "levodopa", "ل-dopa", "ليفودوبا",
@@ -935,7 +899,6 @@ def _medical_chatbot_answer(message: str) -> str:
         "balance", "اتزان", "walking", "مشي", "spasticity", "تيبس", "تشنج",
     ]
 
-    # Emergency / red flag guidance is allowed because it is safety-critical, but still MS-focused.
     if any(k in text for k in ["emergency", "طوارئ", "خطر", "خطير", "مفاجئ", "sudden", "doctor", "دكتور", "طبيب"]):
         return (
             "لو مريض MS ظهرت عليه أعراض شديدة أو مفاجئة مثل ضعف مفاجئ، فقدان أو تشوش شديد في الرؤية، سقوط متكرر، ألم شديد، أو تدهور سريع، الأفضل التواصل مع طبيب أعصاب أو الطوارئ فورًا."
@@ -1104,7 +1067,7 @@ async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
             "FEATURE_VECTOR": feature_vector,
         }
 
-        print("========== ROMBERG DEBUG ==========" , flush=True)
+        print("========== ROMBERG DEBUG ==========", flush=True)
         print("FPS =", video_meta["fps"], flush=True)
         print("Frames =", frames_used, flush=True)
         print("sway_x =", features.get("sway_x"), flush=True)
