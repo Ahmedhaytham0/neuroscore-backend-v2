@@ -915,7 +915,9 @@ async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
 
 @app.post("/analyze/tandem")
 async def analyze_tandem(video: UploadFile = File(...)) -> Dict[str, Any]:
+    _try_start_processing()
     path = await _save_upload(video)
+    model = None
 
     try:
         features, frames_used, chart = extract_tandem_features(path)
@@ -925,7 +927,8 @@ async def analyze_tandem(video: UploadFile = File(...)) -> Dict[str, Any]:
             dtype=float,
         )
 
-        prob = tandem_model.predict_proba(X)[0]
+        model = _load_model(TANDEM_MODEL_PATH)
+        prob = model.predict_proba(X)[0]
 
         payload = _label_payload("tandem", prob, features, frames_used, chart)
         payload["model_name"] = tandem_model_name
@@ -933,11 +936,15 @@ async def analyze_tandem(video: UploadFile = File(...)) -> Dict[str, Any]:
 
         return payload
 
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     finally:
+        model = None
         try:
             os.remove(path)
         except OSError:
             pass
+        _finish_processing()
