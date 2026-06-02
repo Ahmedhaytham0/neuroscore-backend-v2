@@ -738,67 +738,75 @@ def _medical_chatbot_answer(message: str) -> str:
     disclaimer = "\n\nتنبيه مهم: هذه المعلومات للتوعية فقط وليست بديلاً عن استشارة الطبيب أو التشخيص الطبي المباشر."
 
     if not text:
-        return "من فضلك اكتب سؤالك عن MS أو Parkinson." + disclaimer
+        return "من فضلك اكتب سؤالك عن التصلب المتعدد MS فقط." + disclaimer
 
-    non_medical_keywords = [
-        "football", "movie", "game", "سياسة", "ماتش", "فيلم", "أغنية", "طبخ", "برمجة",
+    # The chatbot is intentionally restricted to Multiple Sclerosis (MS) only.
+    # Parkinson-related questions are refused instead of answered.
+    parkinson_keywords = [
+        "parkinson", "parkinson's", "باركنسون", "شلل رعاش", "الرعاش", "رعاش",
+        "tremor", "tremors", "dopamine", "levodopa", "ل-dopa", "ليفودوبا",
     ]
-    if any(k in text for k in non_medical_keywords):
-        return "أنا مخصص فقط للأسئلة الطبية المتعلقة بـ MS / Multiple Sclerosis أو Parkinson." + disclaimer
-
-    ms_keywords = ["ms", "multiple sclerosis", "sclerosis", "تصلب", "التصلب", "متعدد"]
-    parkinson_keywords = ["parkinson", "باركنسون", "شلل رعاش", "رعاش"]
-
-    if any(k in text for k in ms_keywords):
-        if any(k in text for k in ["symptom", "أعراض", "اعراض"]):
-            return (
-                "أعراض التصلب المتعدد قد تشمل: تنميل أو ضعف بالأطراف، مشاكل في الاتزان، إرهاق شديد، زغللة أو مشاكل بالرؤية، تيبس أو تشنجات عضلية، وصعوبة في التركيز أو الذاكرة."
-                + disclaimer
-            )
-        if any(k in text for k in ["treatment", "علاج", "دواء", "ادوية"]):
-            return (
-                "علاج MS يختلف حسب الحالة، وقد يشمل أدوية لتقليل نشاط المرض، علاج الانتكاسات، علاج طبيعي، وتمارين لتحسين الاتزان والحركة. تحديد العلاج لازم يكون بواسطة طبيب أعصاب."
-                + disclaimer
-            )
-        if any(k in text for k in ["test", "اختبار", "تشخيص", "diagnosis"]):
-            return (
-                "تشخيص MS يعتمد عادة على تقييم طبيب الأعصاب، MRI، تحاليل معينة، وأحيانًا فحوصات إضافية. الاختبارات داخل التطبيق تساعد في المتابعة ولا تعتبر تشخيصًا نهائيًا."
-                + disclaimer
-            )
-        return (
-            "التصلب المتعدد MS هو مرض مناعي يؤثر على الجهاز العصبي المركزي، وقد يسبب مشاكل في الحركة، الاتزان، الإحساس، الرؤية، والإرهاق. المتابعة المنتظمة مهمة لتقييم تطور الحالة."
-            + disclaimer
-        )
 
     if any(k in text for k in parkinson_keywords):
-        if any(k in text for k in ["symptom", "أعراض", "اعراض"]):
-            return (
-                "أعراض باركنسون قد تشمل: رعشة، بطء في الحركة، تيبس عضلي، اضطراب في المشي أو الاتزان، وصعوبة في أداء الحركات الدقيقة."
-                + disclaimer
-            )
-        if any(k in text for k in ["test", "اختبار", "finger", "romberg", "tandem", "تشخيص"]):
-            return (
-                "اختبارات مثل Finger-to-Nose وRomberg وTandem تساعد في تقييم الحركة الدقيقة والاتزان والمشي، لكنها أدوات مساعدة وليست تشخيصًا نهائيًا."
-                + disclaimer
-            )
-        if any(k in text for k in ["treatment", "علاج", "دواء", "ادوية"]):
-            return (
-                "علاج باركنسون قد يشمل أدوية لتحسين الحركة، علاج طبيعي، وتمارين اتزان، وأحيانًا تدخلات متقدمة حسب الحالة. القرار لازم يكون مع طبيب أعصاب."
-                + disclaimer
-            )
         return (
-            "مرض باركنسون هو اضطراب عصبي حركي قد يؤثر على الحركة والاتزان والتنسيق العضلي. التطبيق يساعد في تحليل بعض الاختبارات الحركية ومتابعة النتائج."
+            "أنا غير مخصص للإجابة عن مرض باركنسون. أقدر أساعدك فقط في الأسئلة المتعلقة بالتصلب المتعدد MS / Multiple Sclerosis."
             + disclaimer
         )
 
-    if any(k in text for k in ["doctor", "دكتور", "طبيب", "emergency", "طوارئ", "خطر"]):
+    non_ms_keywords = [
+        "football", "movie", "game", "سياسة", "ماتش", "فيلم", "أغنية", "طبخ", "برمجة",
+        "diabetes", "سكر", "ضغط", "hypertension", "heart", "قلب", "سرطان", "cancer",
+    ]
+    if any(k in text for k in non_ms_keywords):
+        return "أنا مخصص فقط للأسئلة الطبية المتعلقة بالتصلب المتعدد MS / Multiple Sclerosis." + disclaimer
+
+    ms_keywords = [
+        "ms", "multiple sclerosis", "sclerosis", "تصلب", "التصلب", "متعدد",
+        "تصلب متعدد", "التصلب المتعدد", "mri", "relapse", "انتكاسة", "myelin", "مايلين",
+        "fatigue", "إرهاق", "ارهاق", "تنميل", "numbness", "vision", "رؤية",
+        "balance", "اتزان", "walking", "مشي", "spasticity", "تيبس", "تشنج",
+    ]
+
+    # Emergency / red flag guidance is allowed because it is safety-critical, but still MS-focused.
+    if any(k in text for k in ["emergency", "طوارئ", "خطر", "خطير", "مفاجئ", "sudden", "doctor", "دكتور", "طبيب"]):
         return (
-            "لو الأعراض شديدة أو مفاجئة مثل ضعف مفاجئ، فقدان رؤية، سقوط متكرر، ألم شديد، أو تدهور سريع، الأفضل التواصل مع طبيب أو الطوارئ فورًا."
+            "لو مريض MS ظهرت عليه أعراض شديدة أو مفاجئة مثل ضعف مفاجئ، فقدان أو تشوش شديد في الرؤية، سقوط متكرر، ألم شديد، أو تدهور سريع، الأفضل التواصل مع طبيب أعصاب أو الطوارئ فورًا."
+            + disclaimer
+        )
+
+    if any(k in text for k in ms_keywords):
+        if any(k in text for k in ["symptom", "symptoms", "أعراض", "اعراض", "signs"]):
+            return (
+                "أعراض التصلب المتعدد MS قد تشمل: تنميل أو ضعف بالأطراف، مشاكل في الاتزان أو المشي، إرهاق شديد، زغللة أو مشاكل بالرؤية، تيبس أو تشنجات عضلية، وصعوبة في التركيز أو الذاكرة."
+                + disclaimer
+            )
+        if any(k in text for k in ["treatment", "علاج", "دواء", "ادوية", "أدوية", "therapy"]):
+            return (
+                "علاج MS يختلف حسب الحالة، وقد يشمل أدوية لتقليل نشاط المرض، علاج الانتكاسات، علاج طبيعي، وتمارين لتحسين الاتزان والحركة. تحديد العلاج ونوع الدواء لازم يكون بواسطة طبيب أعصاب."
+                + disclaimer
+            )
+        if any(k in text for k in ["test", "اختبار", "تشخيص", "diagnosis", "mri", "تحليل"]):
+            return (
+                "تشخيص MS يعتمد عادة على تقييم طبيب الأعصاب، MRI، التاريخ المرضي، وأحيانًا تحاليل أو فحوصات إضافية. اختبارات التطبيق تساعد في المتابعة وتقييم بعض الوظائف، لكنها لا تعتبر تشخيصًا نهائيًا."
+                + disclaimer
+            )
+        if any(k in text for k in ["fatigue", "إرهاق", "ارهاق", "tired", "تعب"]):
+            return (
+                "الإرهاق من الأعراض الشائعة في MS. قد يتحسن بتنظيم النوم، تقسيم المجهود، العلاج الطبيعي، ومراجعة الطبيب لاستبعاد أسباب أخرى مثل الأنيميا أو مشاكل الغدة أو تأثير الأدوية."
+                + disclaimer
+            )
+        if any(k in text for k in ["relapse", "attack", "انتكاسة", "هجمة"]):
+            return (
+                "انتكاسة MS تعني ظهور أعراض عصبية جديدة أو زيادة واضحة في أعراض قديمة لمدة غالبًا أكثر من 24 ساعة، بدون سبب واضح مثل حرارة أو عدوى. عند الاشتباه في انتكاسة لازم التواصل مع طبيب الأعصاب."
+                + disclaimer
+            )
+        return (
+            "التصلب المتعدد MS هو مرض مناعي يؤثر على الجهاز العصبي المركزي، وقد يسبب مشاكل في الحركة، الاتزان، الإحساس، الرؤية، والإرهاق. المتابعة المنتظمة مع طبيب الأعصاب مهمة لتقييم تطور الحالة وخطة العلاج."
             + disclaimer
         )
 
     return (
-        "أقدر أساعدك في أسئلة عن MS أو Parkinson أو اختبارات الحركة والاتزان داخل التطبيق. اسألني مثلًا عن الأعراض، الاختبارات، أو معنى النتائج."
+        "أنا مخصص فقط للأسئلة المتعلقة بالتصلب المتعدد MS / Multiple Sclerosis. اسألني مثلًا عن أعراض MS، التشخيص، الانتكاسة، الإرهاق، العلاج، أو معنى اختبارات المتابعة داخل التطبيق."
         + disclaimer
     )
 
