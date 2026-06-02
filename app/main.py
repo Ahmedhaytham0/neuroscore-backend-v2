@@ -652,7 +652,38 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     spine = sh_mids - hip_mids
 
     spine_lateral = np.abs(spine[:, 0]) / (np.abs(spine[:, 1]) + 1e-6)
-    trunk_ap = np.abs(spine[:, 1])
+
+    # =========================
+    # Trunk AP Lean - matches the Tandem training notebook
+    # =========================
+    sh_z = np.array([
+        (lm[11, 2] + lm[12, 2]) / 2
+        for lm in lm3
+    ])
+
+    hip_z = np.array([
+        (lm[23, 2] + lm[24, 2]) / 2
+        for lm in lm3
+    ])
+
+    tandem_torso_widths = np.array([
+        abs(lm[11, 0] - lm[12, 0])
+        for lm in lm3
+    ])
+
+    tandem_torso_w = np.mean(tandem_torso_widths) + 1e-6
+
+    trunk_ap = np.degrees(
+        np.arctan2(
+            sh_z - hip_z,
+            tandem_torso_w,
+        )
+    )
+
+    trunk_ap_lean_mean = float(np.mean(np.abs(trunk_ap)))
+    trunk_ap_lean_std = float(np.std(trunk_ap))
+    trunk_ap_lean_max = float(np.max(np.abs(trunk_ap)))
+    trunk_ap_lean_range = float(np.max(trunk_ap) - np.min(trunk_ap))
 
     ankle_dist = np.array([
         abs(lm[27, 0] - lm[28, 0])
@@ -704,10 +735,10 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
         hip_osc_std,
         hip_osc_range,
 
-        trunk_ap.mean(),
-        trunk_ap.std(),
-        trunk_ap.max(),
-        trunk_ap.max() - trunk_ap.min(),
+        trunk_ap_lean_mean,
+        trunk_ap_lean_std,
+        trunk_ap_lean_max,
+        trunk_ap_lean_range,
 
         ankle_rhythm_std,
         ankle_rhythm_freq,
