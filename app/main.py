@@ -207,15 +207,44 @@ def _round_dict(d: Dict[str, Any], ndigits: int = 6) -> Dict[str, Any]:
     return out
 
 
+def _model_classes(model: Any) -> List[Any]:
+    classes = getattr(model, "classes_", None)
+
+    if classes is None and hasattr(model, "named_steps"):
+        try:
+            last_step = list(model.named_steps.values())[-1]
+            classes = getattr(last_step, "classes_", None)
+        except Exception:
+            classes = None
+
+    if classes is None:
+        return [0, 1]
+
+    try:
+        return [int(c) if isinstance(c, (np.integer, int)) else c for c in list(classes)]
+    except Exception:
+        return [0, 1]
+
+
 def _label_payload(
     test_name: str,
     prob: np.ndarray,
     features: Dict[str, float],
     frames_used: int,
     chart_data: Dict[str, List[float]] | None = None,
+    model: Any | None = None,
+    features_order: List[str] | None = None,
 ) -> Dict[str, Any]:
-    p_healthy = float(prob[0])
-    p_patient = float(prob[1])
+    classes = _model_classes(model) if model is not None else [0, 1]
+    prob_list = [float(x) for x in list(prob)]
+
+    # Confirmed AI-team mapping:
+    # class 0 = HEALTHY, class 1 = PATIENT.
+    prob_by_class = {str(cls): prob_list[i] for i, cls in enumerate(classes) if i < len(prob_list)}
+
+    p_healthy = float(prob_by_class.get("0", prob_list[0] if prob_list else 0.0))
+    p_patient = float(prob_by_class.get("1", prob_list[1] if len(prob_list) > 1 else 0.0))
+
     label = "PATIENT" if p_patient >= 0.5 else "HEALTHY"
     confidence = max(p_healthy, p_patient) * 100.0
     score = p_healthy * 100.0
@@ -228,6 +257,10 @@ def _label_payload(
         "confidence": round(confidence, 2),
         "p_healthy": round(p_healthy, 6),
         "p_patient": round(p_patient, 6),
+        "class_mapping": {"0": "HEALTHY", "1": "PATIENT"},
+        "model_classes": classes,
+        "raw_probabilities": [round(x, 6) for x in prob_list],
+        "features_order": features_order or list(features.keys()),
         "frames_used": int(frames_used),
         "features": _round_dict(features),
         "chart_data": chart_data or {},
@@ -816,6 +849,17 @@ def chat(request: ChatRequest) -> Dict[str, str]:
     return {"response": _medical_chatbot_answer(request.message)}
 
 
+def _video_meta(video_path: str) -> Dict[str, Any]:
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    cap.release()
+
+    return {
+        "fps": round(float(fps), 3),
+        "total_video_frames": int(total_frames),
+    }
+
 
 @app.get("/")
 def root() -> Dict[str, str]:
@@ -856,7 +900,7 @@ async def analyze_finger(video: UploadFile = File(...)) -> Dict[str, Any]:
         model = _load_model(FINGER_MODEL_PATH)
         prob = model.predict_proba(X)[0]
 
-        payload = _label_payload("finger_to_nose", prob, features, frames_used, chart)
+        payload = _label_payload("finger_to_nose", prob, features, frames_used, chart, model=model, features_order=FINGER_FEATURES)
         payload["model_name"] = finger_model_name
         payload["features_count"] = len(FINGER_FEATURES)
 
@@ -893,7 +937,7 @@ async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
         model = _load_model(ROMBERG_MODEL_PATH)
         prob = model.predict_proba(X)[0]
 
-        payload = _label_payload("romberg", prob, features, frames_used, chart)
+        payload = _label_payload("romberg", prob, features, frames_used, chart, model=model, features_order=ROMBERG_FEATURES)
         payload["model_name"] = romberg_model_name
         payload["features_count"] = len(ROMBERG_FEATURES)
 
@@ -930,9 +974,42 @@ async def analyze_tandem(video: UploadFile = File(...)) -> Dict[str, Any]:
         model = _load_model(TANDEM_MODEL_PATH)
         prob = model.predict_proba(X)[0]
 
-        payload = _label_payload("tandem", prob, features, frames_used, chart)
+        payload = _label_payload("tandem", prob, features, frames_used, chart, model=model, features_order=TANDEM_FEATURES)
         payload["model_name"] = tandem_model_name
         payload["features_count"] = len(TANDEM_FEATURES)
+
+        video_meta = _video_meta(path)
+        feature_vector = [
+            float(features.get(name, 0.0))
+            for name in TANDEM_FEATURES
+        ]
+
+        payload["tandem_debug"] = {
+            "FPS": video_meta["fps"],
+            "Original_Video_Frames": video_meta["total_video_frames"],
+            "Frames_Used_By_MediaPipe": frames_used,
+            "trunk_ap_lean_mean": features.get("trunk_ap_lean_mean"),
+            "trunk_ap_lean_std": features.get("trunk_ap_lean_std"),
+            "ankle_rhythm_std": features.get("ankle_rhythm_std"),
+            "ankle_rhythm_freq": features.get("ankle_rhythm_freq"),
+            "hip_vel_mean": features.get("hip_vel_mean"),
+            "hip_vel_std": features.get("hip_vel_std"),
+            "FEATURE_VECTOR_ORDER": TANDEM_FEATURES,
+            "FEATURE_VECTOR": feature_vector,
+        }
+
+        print("========== TANDEM DEBUG ==========", flush=True)
+        print("FPS =", video_meta["fps"], flush=True)
+        print("Frames =", frames_used, flush=True)
+        print("trunk_ap_lean_mean =", features.get("trunk_ap_lean_mean"), flush=True)
+        print("trunk_ap_lean_std =", features.get("trunk_ap_lean_std"), flush=True)
+        print("ankle_rhythm_std =", features.get("ankle_rhythm_std"), flush=True)
+        print("ankle_rhythm_freq =", features.get("ankle_rhythm_freq"), flush=True)
+        print("hip_vel_mean =", features.get("hip_vel_mean"), flush=True)
+        print("hip_vel_std =", features.get("hip_vel_std"), flush=True)
+        print("FEATURE VECTOR =", flush=True)
+        print(feature_vector, flush=True)
+        print("==================================", flush=True)
 
         return payload
 
