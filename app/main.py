@@ -308,6 +308,24 @@ def _safe_fft_features(signal: np.ndarray, fps: float) -> Tuple[float, float, fl
     return dom_freq, dom_power / total_pow, tremor_ratio
 
 
+def _safe_fft_freq(signal: np.ndarray, fps: float = 25.0) -> float:
+    n = len(signal)
+
+    if n < 10:
+        return 0.0
+
+    sig = signal - np.mean(signal)
+
+    yf = np.abs(fft(sig))[: n // 2]
+    xf = fftfreq(n, 1.0 / fps)[: n // 2]
+
+    if len(yf) < 2:
+        return 0.0
+
+    idx = np.argmax(yf[1:]) + 1
+    return float(abs(xf[idx]))
+
+
 def _elbow_angle(shoulder: np.ndarray, elbow: np.ndarray, wrist: np.ndarray) -> np.ndarray:
     v1 = shoulder - elbow
     v2 = wrist - elbow
@@ -727,17 +745,10 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
         for lm in lm3
     ])
 
-    tandem_torso_widths = np.array([
-        abs(lm[11, 0] - lm[12, 0])
-        for lm in lm3
-    ])
-
-    tandem_torso_w = np.mean(tandem_torso_widths) + 1e-6
-
     trunk_ap = np.degrees(
         np.arctan2(
             sh_z - hip_z,
-            tandem_torso_w,
+            torso_w * np.ones(len(lm3)),
         )
     )
 
@@ -746,22 +757,41 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     trunk_ap_lean_max = float(np.max(np.abs(trunk_ap)))
     trunk_ap_lean_range = float(np.max(trunk_ap) - np.min(trunk_ap))
 
-    ankle_dist = np.array([
-        abs(lm[27, 0] - lm[28, 0])
+    l_ankle_y = np.array([
+        lm[27, 1]
         for lm in lm3
     ])
 
-    ankle_rhythm_std = np.std(ankle_dist)
+    r_ankle_y = np.array([
+        lm[28, 1]
+        for lm in lm3
+    ])
 
-    fft_vals = np.abs(np.fft.fft(ankle_dist))
-    ankle_rhythm_freq = np.argmax(fft_vals[1:]) + 1 if len(fft_vals) > 1 else 0
+    ankle_sig = l_ankle_y - r_ankle_y
 
-    prob = ankle_dist / (np.sum(ankle_dist) + 1e-6)
-    ankle_rhythm_entropy = -np.sum(prob * np.log(prob + 1e-6))
+    ankle_rhythm_std = float(
+        np.std(ankle_sig) / torso_w
+    )
 
-    left_steps = np.array([lm[27, 1] for lm in lm3])
-    right_steps = np.array([lm[28, 1] for lm in lm3])
-    step_asymmetry = np.mean(np.abs(left_steps - right_steps))
+    ankle_rhythm_freq = float(
+        _safe_fft_freq(ankle_sig, fps=25.0)
+    )
+
+    ankle_rhythm_entropy = float(
+        np.std(np.diff(ankle_sig))
+        /
+        (np.std(ankle_sig) + 1e-6)
+    )
+
+    step_asymmetry = float(
+        abs(
+            np.mean(l_ankle_y)
+            -
+            np.mean(r_ankle_y)
+        )
+        /
+        torso_w
+    )
 
     knee_spread = np.array([
         abs(lm[25, 0] - lm[26, 0])
@@ -771,12 +801,25 @@ def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[s
     knee_spread_mean = np.mean(knee_spread) / torso_w
     knee_spread_std = np.std(knee_spread) / torso_w
 
-    hip_vel = np.diff(hip_x_c)
-    hip_acc = np.diff(hip_vel)
+    hip_center = np.array([
+        (lm[23, :2] + lm[24, :2]) / 2
+        for lm in lm3
+    ])
 
-    hip_vel_mean = np.mean(np.abs(hip_vel)) if len(hip_vel) else 0.0
-    hip_vel_std = np.std(hip_vel) if len(hip_vel) else 0.0
-    hip_acc_mean = np.mean(np.abs(hip_acc)) if len(hip_acc) else 0.0
+    hip_vel = (
+        np.linalg.norm(
+            np.diff(hip_center, axis=0),
+            axis=1,
+        )
+        /
+        torso_w
+    )
+
+    hip_acc = np.abs(np.diff(hip_vel))
+
+    hip_vel_mean = float(np.mean(hip_vel)) if len(hip_vel) else 0.0
+    hip_vel_std = float(np.std(hip_vel)) if len(hip_vel) else 0.0
+    hip_acc_mean = float(np.mean(hip_acc)) if len(hip_acc) else 0.0
 
     values = np.array([
         sh_tilts.mean(),
