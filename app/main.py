@@ -58,30 +58,30 @@ FINGER_FEATURES = [
 ]
 
 ROMBERG_FEATURES = [
-    "sh_tilt_mean",
-    "sh_tilt_std",
-    "sh_tilt_max",
-    "sh_tilt_range",
-    "sh_tilt_p75",
-    "sh_tilt_p90",
-    "hip_tilt_mean",
-    "hip_tilt_std",
-    "hip_tilt_max",
-    "hip_tilt_range",
-    "hip_tilt_p75",
-    "hip_tilt_p90",
-    "hip_osc_std",
-    "hip_osc_range",
-    "wrist_mean",
-    "wrist_std",
-    "elbow_std",
-    "tilt_vel_mean",
-    "tilt_vel_std",
-    "lean_gt_15",
-    "lean_gt_25",
-    "lean_gt_40",
-    "hip_gt_15",
-    "hip_gt_25",
+    "sway_x",
+    "sway_y",
+    "sway_range_x",
+    "sway_range_y",
+    "sway_std_x",
+    "sway_std_y",
+    "hip_sway_x",
+    "hip_sway_y",
+    "hip_sway_range_x",
+    "hip_sway_range_y",
+    "vel_mean",
+    "vel_std",
+    "vel_max",
+    "acc_mean",
+    "acc_std",
+    "angle_mean",
+    "angle_std",
+    "angle_range",
+    "sway_path",
+    "ankle_mean",
+    "ankle_std",
+    "ankle_max",
+    "motion_energy",
+    "entropy",
 ]
 
 TANDEM_FEATURES = [
@@ -530,82 +530,143 @@ def _pose_sequence(video_path: str, n_frames: int = 30) -> List[np.ndarray]:
 
 
 def extract_romberg_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[str, float], int, Dict[str, List[float]]]:
+    """Extract Romberg features using the exact AI-team feature set/order.
+
+    Confirmed feature order:
+    sway_x, sway_y, sway_range_x, sway_range_y, sway_std_x, sway_std_y,
+    hip_sway_x, hip_sway_y, hip_sway_range_x, hip_sway_range_y,
+    vel_mean, vel_std, vel_max, acc_mean, acc_std,
+    angle_mean, angle_std, angle_range, sway_path,
+    ankle_mean, ankle_std, ankle_max, motion_energy, entropy.
+    """
     lm_seq = _pose_sequence(video_path, n_frames)
-    lm3 = [s[:, :3] for s in lm_seq]
+    lm3 = np.array([s[:, :3] for s in lm_seq], dtype=float)
 
-    torso_widths = np.array([abs(lm[11, 0] - lm[12, 0]) for lm in lm3])
-    torso_w = float(np.mean(torso_widths) + 1e-6)
+    L_SHOULDER, R_SHOULDER = 11, 12
+    L_HIP, R_HIP = 23, 24
+    L_ANKLE, R_ANKLE = 27, 28
 
-    sh_tilts = np.array([
-        np.degrees(np.arctan2(abs(lm[11, 1] - lm[12, 1]), abs(lm[11, 0] - lm[12, 0]) + 1e-6))
-        for lm in lm3
-    ])
+    shoulder_center = (lm3[:, L_SHOULDER, :] + lm3[:, R_SHOULDER, :]) / 2.0
+    hip_center = (lm3[:, L_HIP, :] + lm3[:, R_HIP, :]) / 2.0
+    ankle_center = (lm3[:, L_ANKLE, :] + lm3[:, R_ANKLE, :]) / 2.0
 
-    hip_tilts = np.array([
-        np.degrees(np.arctan2(abs(lm[23, 1] - lm[24, 1]), abs(lm[23, 0] - lm[24, 0]) + 1e-6))
-        for lm in lm3
-    ])
+    body_height = float(np.mean(np.linalg.norm(shoulder_center - ankle_center, axis=1)))
+    if body_height < 1e-5:
+        body_height = 1.0
 
-    hip_x = np.array([(lm[23, 0] + lm[24, 0]) / 2 for lm in lm3])
-    hip_x_c = hip_x - np.mean(hip_x)
+    # -------------------
+    # SWAY FEATURES
+    # -------------------
+    sway_x = float(np.var(shoulder_center[:, 0]) / body_height)
+    sway_y = float(np.var(shoulder_center[:, 1]) / body_height)
+    sway_range_x = float((np.max(shoulder_center[:, 0]) - np.min(shoulder_center[:, 0])) / body_height)
+    sway_range_y = float((np.max(shoulder_center[:, 1]) - np.min(shoulder_center[:, 1])) / body_height)
+    sway_std_x = float(np.std(shoulder_center[:, 0]) / body_height)
+    sway_std_y = float(np.std(shoulder_center[:, 1]) / body_height)
 
-    hip_osc_std = np.std(hip_x_c) / torso_w
-    hip_osc_range = (np.max(hip_x_c) - np.min(hip_x_c)) / torso_w
+    hip_sway_x = float(np.var(hip_center[:, 0]) / body_height)
+    hip_sway_y = float(np.var(hip_center[:, 1]) / body_height)
+    hip_sway_range_x = float((np.max(hip_center[:, 0]) - np.min(hip_center[:, 0])) / body_height)
+    hip_sway_range_y = float((np.max(hip_center[:, 1]) - np.min(hip_center[:, 1])) / body_height)
 
-    wrist_spread = np.array([abs(lm[15, 0] - lm[16, 0]) for lm in lm3])
-    wrist_spread_mean = np.mean(wrist_spread) / torso_w
-    wrist_spread_std = np.std(wrist_spread) / torso_w
+    # -------------------
+    # VELOCITY FEATURES
+    # -------------------
+    velocity = np.linalg.norm(np.diff(shoulder_center, axis=0), axis=1)
+    vel_mean = float(np.mean(velocity)) if len(velocity) else 0.0
+    vel_std = float(np.std(velocity)) if len(velocity) else 0.0
+    vel_max = float(np.max(velocity)) if len(velocity) else 0.0
 
-    elbow_spread = np.array([abs(lm[13, 0] - lm[14, 0]) for lm in lm3])
-    elbow_spread_std = np.std(elbow_spread) / torso_w
+    # -------------------
+    # ACCELERATION FEATURES
+    # -------------------
+    acceleration = np.diff(velocity)
+    acc_mean = float(np.mean(acceleration)) if len(acceleration) else 0.0
+    acc_std = float(np.std(acceleration)) if len(acceleration) else 0.0
 
-    sh_tilt_diff = np.abs(np.diff(sh_tilts))
-    sh_tilt_velocity_mean = sh_tilt_diff.mean() if len(sh_tilt_diff) else 0.0
-    sh_tilt_velocity_std = sh_tilt_diff.std() if len(sh_tilt_diff) else 0.0
+    # -------------------
+    # BODY ANGLE FEATURES
+    # -------------------
+    body_axis = shoulder_center - hip_center
+    angles = np.arctan2(body_axis[:, 1], body_axis[:, 0])
+    angle_mean = float(np.mean(angles))
+    angle_std = float(np.std(angles))
+    angle_range = float(np.max(angles) - np.min(angles))
+
+    # -------------------
+    # SWAY PATH
+    # -------------------
+    sway_path = float(np.sum(np.linalg.norm(np.diff(shoulder_center, axis=0), axis=1))) if len(shoulder_center) > 1 else 0.0
+
+    # -------------------
+    # ANKLE MOVEMENT
+    # -------------------
+    ankle_velocity = np.linalg.norm(np.diff(ankle_center, axis=0), axis=1)
+    ankle_mean = float(np.mean(ankle_velocity)) if len(ankle_velocity) else 0.0
+    ankle_std = float(np.std(ankle_velocity)) if len(ankle_velocity) else 0.0
+    ankle_max = float(np.max(ankle_velocity)) if len(ankle_velocity) else 0.0
+
+    # -------------------
+    # MOTION ENERGY
+    # Same AI-team formula: diff over landmark x-coordinates array.
+    # -------------------
+    motion_energy = float(np.mean(np.abs(np.diff(lm3[:, :, 0])))) if lm3.shape[1] > 1 else 0.0
+
+    # -------------------
+    # ENTROPY FEATURE
+    # -------------------
+    if len(shoulder_center) > 1:
+        entropy = float(
+            np.mean(
+                np.abs(np.diff(shoulder_center[:, 0]))
+                + np.abs(np.diff(shoulder_center[:, 1]))
+            )
+        )
+    else:
+        entropy = 0.0
 
     values = np.array([
-        sh_tilts.mean(),
-        sh_tilts.std(),
-        sh_tilts.max(),
-        sh_tilts.max() - sh_tilts.min(),
-        np.percentile(sh_tilts, 75),
-        np.percentile(sh_tilts, 90),
-
-        hip_tilts.mean(),
-        hip_tilts.std(),
-        hip_tilts.max(),
-        hip_tilts.max() - hip_tilts.min(),
-        np.percentile(hip_tilts, 75),
-        np.percentile(hip_tilts, 90),
-
-        hip_osc_std,
-        hip_osc_range,
-
-        wrist_spread_mean,
-        wrist_spread_std,
-        elbow_spread_std,
-
-        sh_tilt_velocity_mean,
-        sh_tilt_velocity_std,
-
-        np.mean(sh_tilts > 15),
-        np.mean(sh_tilts > 25),
-        np.mean(sh_tilts > 40),
-
-        np.mean(hip_tilts > 15),
-        np.mean(hip_tilts > 25),
+        sway_x,
+        sway_y,
+        sway_range_x,
+        sway_range_y,
+        sway_std_x,
+        sway_std_y,
+        hip_sway_x,
+        hip_sway_y,
+        hip_sway_range_x,
+        hip_sway_range_y,
+        vel_mean,
+        vel_std,
+        vel_max,
+        acc_mean,
+        acc_std,
+        angle_mean,
+        angle_std,
+        angle_range,
+        sway_path,
+        ankle_mean,
+        ankle_std,
+        ankle_max,
+        motion_energy,
+        entropy,
     ], dtype=float)
 
-    features = {name: round(float(val), 6) for name, val in zip(ROMBERG_FEATURES, values)}
+    features = {
+        name: round(float(val), 6)
+        for name, val in zip(ROMBERG_FEATURES, values)
+    }
 
     chart = {
-        "shoulder_tilt_signal": [round(float(x), 3) for x in sh_tilts[:120]],
-        "hip_tilt_signal": [round(float(x), 3) for x in hip_tilts[:120]],
-        "hip_sway_signal": [round(float(x), 6) for x in hip_x_c[:120]],
+        "shoulder_sway_x_signal": [round(float(x), 6) for x in shoulder_center[:120, 0]],
+        "shoulder_sway_y_signal": [round(float(y), 6) for y in shoulder_center[:120, 1]],
+        "hip_sway_x_signal": [round(float(x), 6) for x in hip_center[:120, 0]],
+        "hip_sway_y_signal": [round(float(y), 6) for y in hip_center[:120, 1]],
+        "velocity_signal": [round(float(x), 6) for x in velocity[:120]],
+        "angle_signal": [round(float(x), 6) for x in angles[:120]],
     }
 
     return features, len(lm_seq), chart
-
 
 def extract_tandem_features(video_path: str, n_frames: int = 30) -> Tuple[Dict[str, float], int, Dict[str, List[float]]]:
     lm_seq = _pose_sequence(video_path, n_frames)
@@ -971,6 +1032,51 @@ async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
         payload = _label_payload("romberg", prob, features, frames_used, chart, model=model, features_order=ROMBERG_FEATURES)
         payload["model_name"] = romberg_model_name
         payload["features_count"] = len(ROMBERG_FEATURES)
+
+        video_meta = _video_meta(path)
+        feature_vector = [
+            float(features.get(name, 0.0))
+            for name in ROMBERG_FEATURES
+        ]
+
+        payload["romberg_debug"] = {
+            "FPS": video_meta["fps"],
+            "Original_Video_Frames": video_meta["total_video_frames"],
+            "Frames_Used_By_MediaPipe": frames_used,
+            "sway_x": features.get("sway_x"),
+            "sway_y": features.get("sway_y"),
+            "hip_sway_x": features.get("hip_sway_x"),
+            "hip_sway_y": features.get("hip_sway_y"),
+            "vel_mean": features.get("vel_mean"),
+            "vel_std": features.get("vel_std"),
+            "acc_mean": features.get("acc_mean"),
+            "acc_std": features.get("acc_std"),
+            "angle_mean": features.get("angle_mean"),
+            "angle_std": features.get("angle_std"),
+            "sway_path": features.get("sway_path"),
+            "ankle_mean": features.get("ankle_mean"),
+            "motion_energy": features.get("motion_energy"),
+            "entropy": features.get("entropy"),
+            "FEATURE_VECTOR_ORDER": ROMBERG_FEATURES,
+            "FEATURE_VECTOR": feature_vector,
+        }
+
+        print("========== ROMBERG DEBUG ==========" , flush=True)
+        print("FPS =", video_meta["fps"], flush=True)
+        print("Frames =", frames_used, flush=True)
+        print("sway_x =", features.get("sway_x"), flush=True)
+        print("sway_y =", features.get("sway_y"), flush=True)
+        print("hip_sway_x =", features.get("hip_sway_x"), flush=True)
+        print("hip_sway_y =", features.get("hip_sway_y"), flush=True)
+        print("vel_mean =", features.get("vel_mean"), flush=True)
+        print("vel_std =", features.get("vel_std"), flush=True)
+        print("acc_mean =", features.get("acc_mean"), flush=True)
+        print("acc_std =", features.get("acc_std"), flush=True)
+        print("angle_mean =", features.get("angle_mean"), flush=True)
+        print("angle_std =", features.get("angle_std"), flush=True)
+        print("FEATURE VECTOR =", flush=True)
+        print(feature_vector, flush=True)
+        print("===================================", flush=True)
 
         return payload
 
