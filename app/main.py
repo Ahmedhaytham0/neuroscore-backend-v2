@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import gc
+import threading
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
@@ -136,23 +138,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_finger_obj = joblib.load(FINGER_MODEL_PATH)
-finger_model = _finger_obj["model"] if isinstance(_finger_obj, dict) and "model" in _finger_obj else _finger_obj
-finger_model_name = _finger_obj.get("name", "Finger To Nose Model") if isinstance(_finger_obj, dict) else "Finger To Nose Model"
+# Do not load all models at startup. Railway memory is limited, so models are
+# loaded lazily inside the required endpoint, then released after prediction.
+PROCESS_LOCK = threading.Lock()
+
+finger_model_name = "Random Forest"
 finger_model_metrics = {
-    "test_acc": _finger_obj.get("test_acc") if isinstance(_finger_obj, dict) else None,
-    "test_auc": _finger_obj.get("test_auc") if isinstance(_finger_obj, dict) else None,
-    "sensitivity": _finger_obj.get("sensitivity") if isinstance(_finger_obj, dict) else None,
-    "specificity": _finger_obj.get("specificity") if isinstance(_finger_obj, dict) else None,
+    "test_acc": 0.905263,
+    "test_auc": 0.949231,
+    "sensitivity": 0.892308,
+    "specificity": 0.933333,
 }
+romberg_model_name = "Gradient Boosting"
+tandem_model_name = "Random Forest"
 
-_romberg_obj = joblib.load(ROMBERG_MODEL_PATH)
-romberg_model = _romberg_obj["model"] if isinstance(_romberg_obj, dict) and "model" in _romberg_obj else _romberg_obj
-romberg_model_name = _romberg_obj.get("name", "Romberg Model") if isinstance(_romberg_obj, dict) else "Romberg Model"
 
-_tandem_obj = joblib.load(TANDEM_MODEL_PATH)
-tandem_model = _tandem_obj["model"] if isinstance(_tandem_obj, dict) and "model" in _tandem_obj else _tandem_obj
-tandem_model_name = _tandem_obj.get("name", "Tandem ML Model") if isinstance(_tandem_obj, dict) else "Tandem ML Model"
+def _unwrap_model(obj: Any) -> Any:
+    return obj["model"] if isinstance(obj, dict) and "model" in obj else obj
+
+
+def _load_model(path: Path) -> Any:
+    if not path.exists():
+        raise FileNotFoundError(f"Model file not found: {path}")
+    return _unwrap_model(joblib.load(path))
+
+
+def _try_start_processing() -> None:
+    # Prevent multiple heavy video/model requests from running together and
+    # exhausting Railway RAM. The Flutter app / Swagger gets a clear response.
+    if not PROCESS_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="Server is currently processing another video. Please try again in a moment.",
+        )
+
+
+def _finish_processing() -> None:
+    try:
+        PROCESS_LOCK.release()
+    except RuntimeError:
+        pass
+    gc.collect()
+
 
 mp_pose = mp.solutions.pose
 mp_hands = mp.solutions.hands
@@ -806,7 +833,9 @@ def health() -> Dict[str, Any]:
 
 @app.post("/analyze/finger")
 async def analyze_finger(video: UploadFile = File(...)) -> Dict[str, Any]:
+    _try_start_processing()
     path = await _save_upload(video)
+    model = None
 
     try:
         features, frames_used, chart = extract_finger_features(path)
@@ -816,7 +845,8 @@ async def analyze_finger(video: UploadFile = File(...)) -> Dict[str, Any]:
             columns=FINGER_FEATURES,
         )
 
-        prob = finger_model.predict_proba(X)[0]
+        model = _load_model(FINGER_MODEL_PATH)
+        prob = model.predict_proba(X)[0]
 
         payload = _label_payload("finger_to_nose", prob, features, frames_used, chart)
         payload["model_name"] = finger_model_name
@@ -824,19 +854,25 @@ async def analyze_finger(video: UploadFile = File(...)) -> Dict[str, Any]:
 
         return payload
 
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     finally:
+        model = None
         try:
             os.remove(path)
         except OSError:
             pass
+        _finish_processing()
 
 
 @app.post("/analyze/romberg")
 async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
+    _try_start_processing()
     path = await _save_upload(video)
+    model = None
 
     try:
         features, frames_used, chart = extract_romberg_features(path)
@@ -846,7 +882,8 @@ async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
             dtype=float,
         )
 
-        prob = romberg_model.predict_proba(X)[0]
+        model = _load_model(ROMBERG_MODEL_PATH)
+        prob = model.predict_proba(X)[0]
 
         payload = _label_payload("romberg", prob, features, frames_used, chart)
         payload["model_name"] = romberg_model_name
@@ -854,14 +891,18 @@ async def analyze_romberg(video: UploadFile = File(...)) -> Dict[str, Any]:
 
         return payload
 
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     finally:
+        model = None
         try:
             os.remove(path)
         except OSError:
             pass
+        _finish_processing()
 
 
 @app.post("/analyze/tandem")
